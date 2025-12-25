@@ -1,0 +1,29 @@
+{
+  "name": "anime-tracker",
+  "title": "Anime Tracker",
+  "description": "Mikan Project Tracker",
+  "icon": "command-icon.png",
+  "author": "anaheim",
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "index",
+      "title": "Anime Tracker",
+      "description": "Show latest anime from Mikan",
+      "mode": "view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.64.0",
+    "rss-parser": "^3.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "18.18.4",
+    "@types/react": "18.2.27",
+    "typescript": "^5.2.2"
+  },
+  "scripts": {
+    "dev": "ray dev",
+    "build": "ray build"
+  }
+}
