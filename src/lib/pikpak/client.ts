@@ -127,7 +127,14 @@ export class PikPakClient {
     if (config.params) {
       Object.entries(config.params).forEach(([key, value]) => {
         if (value !== undefined && value !== null) {
-          const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
+          let stringValue: string;
+          if (typeof value === 'object') {
+            stringValue = JSON.stringify(value);
+          } else if (typeof value === 'number' || typeof value === 'boolean') {
+            stringValue = String(value);
+          } else {
+            stringValue = value as string;
+          }
           url.searchParams.append(key, stringValue);
         }
       });

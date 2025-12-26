@@ -297,6 +297,30 @@ interface TaskListItemProps {
   onRefresh: () => void;
 }
 
+interface CompleteTaskActionsProps {
+  fileId: string;
+  onGetDownloadUrl: (fileId: string) => void;
+  onPlayWithIINA: (fileId: string) => void;
+}
+
+function CompleteTaskActions({ fileId, onGetDownloadUrl, onPlayWithIINA }: Readonly<CompleteTaskActionsProps>) {
+  return (
+    <>
+      <Action
+        title="使用 IINA 播放"
+        icon={Icon.Play}
+        onAction={() => onPlayWithIINA(fileId)}
+      />
+      <Action
+        title="获取下载链接"
+        icon={Icon.Link}
+        shortcut={{ modifiers: ["cmd"], key: "l" }}
+        onAction={() => onGetDownloadUrl(fileId)}
+      />
+    </>
+  );
+}
+
 function TaskListItem({ task, onDelete, onRetry, onGetDownloadUrl, onPlayWithIINA, onRefresh }: Readonly<TaskListItemProps>) {
   const getStatusIcon = () => {
     switch (task.phase) {
@@ -344,24 +368,13 @@ function TaskListItem({ task, onDelete, onRetry, onGetDownloadUrl, onPlayWithIIN
       actions={
         <ActionPanel>
           <ActionPanel.Section title="任务操作">
-            {(() => {
-              const fileId = task.file_id;
-              return task.phase === "PHASE_TYPE_COMPLETE" && fileId ? (
-                <>
-                  <Action
-                    title="使用 IINA 播放"
-                    icon={Icon.Play}
-                    onAction={() => onPlayWithIINA(fileId)}
-                  />
-                  <Action
-                    title="获取下载链接"
-                    icon={Icon.Link}
-                    shortcut={{ modifiers: ["cmd"], key: "l" }}
-                    onAction={() => onGetDownloadUrl(fileId)}
-                  />
-                </>
-              ) : null;
-            })()}
+            {task.phase === "PHASE_TYPE_COMPLETE" && task.file_id && (
+              <CompleteTaskActions
+                fileId={task.file_id}
+                onGetDownloadUrl={onGetDownloadUrl}
+                onPlayWithIINA={onPlayWithIINA}
+              />
+            )}
             {task.phase === "PHASE_TYPE_ERROR" && (
               <Action
                 title="重试任务"
