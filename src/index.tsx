@@ -19,13 +19,13 @@ const decodeHtmlEntities = (text: string): string => {
     .replaceAll("&nbsp;", " ");
 
   // 十进制数字实体: &#1234;
-  result = result.replace(/&#(\d+);/g, (_, dec) =>
-    String.fromCodePoint(parseInt(dec, 10))
+  result = result.replaceAll(/&#(\d+);/g, (_, dec) =>
+    String.fromCodePoint(Number.parseInt(dec, 10))
   );
 
   // 十六进制数字实体: &#x1A2B;
-  result = result.replace(/&#x([0-9a-fA-F]+);/gi, (_, hex) =>
-    String.fromCodePoint(parseInt(hex, 16))
+  result = result.replaceAll(/&#x([0-9a-f]+);/gi, (_, hex) =>
+    String.fromCodePoint(Number.parseInt(hex, 16))
   );
 
   return result;
@@ -35,7 +35,7 @@ const decodeHtmlEntities = (text: string): string => {
 const formatDate = (dateStr: string): string => {
   if (!dateStr) return "未知时间";
   const date = new Date(dateStr);
-  if (isNaN(date.getTime())) return "未知时间";
+  if (Number.isNaN(date.getTime())) return "未知时间";
 
   return new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
