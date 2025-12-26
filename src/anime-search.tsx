@@ -13,78 +13,27 @@ import {
 import { useState, useEffect, useRef, useCallback } from "react";
 import Parser from "rss-parser";
 
-// ============ 常量 ============
-const MIKAN_BASE = "https://mikan.tangbai.cc";
+import {
+  type BangumiItem,
+  type SearchResult,
+  type ActionMode,
+  MIKAN_MIRROR,
+  GRID_COLUMNS,
+  USER_AGENT,
+  decodeHtmlEntities,
+  extractFileSize,
+  extractSubGroup,
+  MAGNET_PATTERN,
+  SEARCH_RESULT_PATTERN,
+} from "./lib";
+import { buildDetailMarkdown } from "./components/DetailMarkdown";
 
-// ============ 类型定义 ============
-interface SearchResult {
-  id: string;
-  name: string;
-  coverUrl: string;
-}
+const parser = new Parser();
 
-interface BangumiItem {
-  title: string;
-  link: string;
-  pubDate: string;
-  torrentUrl?: string;
-  guid?: string;
-  description?: string;
-}
-
-type ActionMode = "browser_pikpak" | "download" | "copy";
-
-// ============ 工具函数 ============
-const decodeHtmlEntities = (text: string): string => {
-  let result = text
-    .replaceAll("&amp;", "&")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#39;", "'")
-    .replaceAll("&nbsp;", " ");
-
-  // 十进制数字实体: &#1234;
-  result = result.replaceAll(/&#(\d+);/g, (_, dec) =>
-    String.fromCodePoint(Number.parseInt(dec, 10))
-  );
-
-  // 十六进制数字实体: &#x1A2B;
-  result = result.replaceAll(/&#x([0-9a-f]+);/gi, (_, hex) =>
-    String.fromCodePoint(Number.parseInt(hex, 16))
-  );
-
-  return result;
-};
-
-const formatDate = (dateStr: string): string => {
-  if (!dateStr) return "未知时间";
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) return "未知时间";
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-};
-
-// 从描述中提取文件大小
-const extractFileSize = (description: string): string | undefined => {
-  const match = /\[([^\]]*[GMK]B[^\]]*)\]/i.exec(description);
-  return match?.[1];
-};
-
-// ============ 搜索 API ============
 async function searchAnime(keyword: string): Promise<SearchResult[]> {
-  const url = `${MIKAN_BASE}/Home/Search?searchstr=${encodeURIComponent(keyword)}`;
+  const url = `${MIKAN_MIRROR}/Home/Search?searchstr=${encodeURIComponent(keyword)}`;
   const response = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-    },
+    headers: { "User-Agent": USER_AGENT },
   });
 
   if (!response.ok) {
@@ -94,17 +43,15 @@ async function searchAnime(keyword: string): Promise<SearchResult[]> {
   const html = await response.text();
   const results: SearchResult[] = [];
 
-  // 匹配搜索结果中的动漫项
-  // <li><a href="/Home/Bangumi/1824">...<span data-src="...">...<div class="an-text" title="...">
-  const regex =
-    /<li>\s*<a\s+href="\/Home\/Bangumi\/(\d+)"[^>]*>[\s\S]*?data-src="([^"]+)"[\s\S]*?class="an-text"[^>]*title="([^"]+)"/g;
+  // 重置正则表达式的 lastIndex（因为使用了全局标志）
+  SEARCH_RESULT_PATTERN.lastIndex = 0;
 
   let match;
-  while ((match = regex.exec(html)) !== null) {
+  while ((match = SEARCH_RESULT_PATTERN.exec(html)) !== null) {
     const [, id, coverPath, title] = match;
     results.push({
       id,
-      coverUrl: MIKAN_BASE + coverPath,
+      coverUrl: MIKAN_MIRROR + coverPath,
       name: decodeHtmlEntities(title),
     });
   }
@@ -112,7 +59,6 @@ async function searchAnime(keyword: string): Promise<SearchResult[]> {
   return results;
 }
 
-// ============ 主命令：搜索界面 ============
 export default function AnimeSearchCommand() {
   const [searchText, setSearchText] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -146,7 +92,7 @@ export default function AnimeSearchCommand() {
 
   return (
     <Grid
-      columns={5}
+      columns={GRID_COLUMNS}
       aspectRatio="2/3"
       inset={Grid.Inset.Small}
       filtering={false}
@@ -175,7 +121,7 @@ export default function AnimeSearchCommand() {
                 />
                 <Action.OpenInBrowser
                   title="在浏览器中打开"
-                  url={`${MIKAN_BASE}/Home/Bangumi/${item.id}`}
+                  url={`${MIKAN_MIRROR}/Home/Bangumi/${item.id}`}
                 />
               </ActionPanel>
             }
@@ -186,20 +132,11 @@ export default function AnimeSearchCommand() {
   );
 }
 
-// ============ 作品详情界面 ============
 interface BangumiDetailProps {
   id: string;
   name: string;
   coverUrl: string;
 }
-
-const parser = new Parser();
-
-// 提取字幕组名称
-const extractSubGroup = (title: string): string => {
-  const match = /^\[([^\]]+)\]/.exec(title);
-  return match?.[1] ?? "未知";
-};
 
 function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
   const [items, setItems] = useState<BangumiItem[]>([]);
@@ -207,28 +144,22 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
   const [stagedItems, setStagedItems] = useState<BangumiItem[]>([]);
   const [selectedSubGroup, setSelectedSubGroup] = useState<string>("all");
 
-  // 计算唯一的字幕组列表
   const subGroups = [...new Set(items.map((item) => extractSubGroup(item.title)))];
 
-  // 过滤后的资源列表
   const filteredItems =
     selectedSubGroup === "all"
       ? items
       : items.filter((item) => extractSubGroup(item.title) === selectedSubGroup);
 
-  // 磁力链缓存
   const magnetCacheRef = useRef<Record<string, string | null>>({});
   const pendingRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     async function fetchRss() {
       try {
-        const rssUrl = `${MIKAN_BASE}/RSS/Bangumi?bangumiId=${id}`;
+        const rssUrl = `${MIKAN_MIRROR}/RSS/Bangumi?bangumiId=${id}`;
         const response = await fetch(rssUrl, {
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-          },
+          headers: { "User-Agent": USER_AGENT },
         });
 
         if (!response.ok) {
@@ -265,14 +196,11 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
     fetchRss();
   }, [id]);
 
-  // 获取磁力链
   const getMagnetLink = useCallback(async (detailUrl: string): Promise<string | null> => {
-    // 检查缓存
     if (magnetCacheRef.current[detailUrl] !== undefined) {
       return magnetCacheRef.current[detailUrl];
     }
 
-    // 防止重复请求
     if (pendingRef.current.has(detailUrl)) {
       return null;
     }
@@ -284,8 +212,7 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const html = await response.text();
 
-      const magnetRegex = /magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^"'<\s]*/u;
-      const match = magnetRegex.exec(html);
+      const match = MAGNET_PATTERN.exec(html);
       const magnet = match ? decodeHtmlEntities(match[0]) : null;
 
       magnetCacheRef.current[detailUrl] = magnet;
@@ -299,7 +226,6 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
     }
   }, []);
 
-  // 处理操作
   const handleAction = useCallback(
     async (item: BangumiItem, mode: ActionMode) => {
       const toast = await showToast({ style: Toast.Style.Animated, title: "解析磁力链..." });
@@ -332,10 +258,11 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
     [getMagnetLink]
   );
 
-  // 暂存操作
+  const getItemKey = (item: BangumiItem): string => item.guid ?? item.link;
+
   const handleStage = useCallback((item: BangumiItem) => {
     setStagedItems((prev) => {
-      if (prev.some((i) => (i.guid ?? i.link) === (item.guid ?? item.link))) {
+      if (prev.some((i) => getItemKey(i) === getItemKey(item))) {
         showToast({ style: Toast.Style.Failure, title: "已在暂存列表中" });
         return prev;
       }
@@ -345,11 +272,10 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
   }, []);
 
   const handleUnstage = useCallback((item: BangumiItem) => {
-    setStagedItems((prev) => prev.filter((i) => (i.guid ?? i.link) !== (item.guid ?? item.link)));
+    setStagedItems((prev) => prev.filter((i) => getItemKey(i) !== getItemKey(item)));
     showToast({ style: Toast.Style.Success, title: "已从暂存移除" });
   }, []);
 
-  // 批量复制所有暂存项的磁力链
   const handleCopyAllMagnets = useCallback(async () => {
     if (stagedItems.length === 0) {
       await showToast({ style: Toast.Style.Failure, title: "没有暂存的项目" });
@@ -408,7 +334,7 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
         <List.Section title="📦 暂存列表" subtitle={`${stagedItems.length} 项`}>
           {stagedItems.map((item) => (
             <StagedListItem
-              key={`staged-${item.guid ?? item.link}`}
+              key={`staged-${getItemKey(item)}`}
               item={item}
               coverUrl={coverUrl}
               animeName={name}
@@ -424,13 +350,13 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
       <List.Section title="📺 资源列表" subtitle={`${filteredItems.length} 个资源`}>
         {filteredItems.map((item) => (
           <ResourceListItem
-            key={item.guid ?? item.link}
+            key={getItemKey(item)}
             item={item}
             coverUrl={coverUrl}
             animeName={name}
             onAction={handleAction}
             onStage={handleStage}
-            isStaged={stagedItems.some((s) => (s.guid ?? s.link) === (item.guid ?? item.link))}
+            isStaged={stagedItems.some((s) => getItemKey(s) === getItemKey(item))}
             onCopyAll={handleCopyAllMagnets}
             stagedCount={stagedItems.length}
           />
@@ -440,7 +366,6 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
   );
 }
 
-// ============ 资源列表项 ============
 interface ResourceListItemProps {
   item: BangumiItem;
   coverUrl: string;
@@ -463,20 +388,15 @@ function ResourceListItem({
   stagedCount,
 }: Readonly<ResourceListItemProps>) {
   const fileSize = extractFileSize(item.description || item.title);
-  const subGroup = /^\[([^\]]+)\]/.exec(item.title)?.[1] ?? "未知";
+  const subGroup = extractSubGroup(item.title);
 
-  const detailMarkdown = `
-![封面](${coverUrl})
-
-# ${animeName}
-
-**更新时间**: ${formatDate(item.pubDate)}
-
-${fileSize ? `**文件大小**: ${fileSize}` : ""}
-
----
-**原始文件**: ${item.title}
-  `;
+  const detailMarkdown = buildDetailMarkdown({
+    coverUrl,
+    animeName,
+    pubDate: item.pubDate,
+    fileSize,
+    title: item.title,
+  });
 
   return (
     <List.Item
@@ -541,7 +461,6 @@ ${fileSize ? `**文件大小**: ${fileSize}` : ""}
   );
 }
 
-// ============ 暂存列表项 ============
 interface StagedListItemProps {
   item: BangumiItem;
   coverUrl: string;
@@ -562,20 +481,15 @@ function StagedListItem({
   stagedCount,
 }: Readonly<StagedListItemProps>) {
   const fileSize = extractFileSize(item.description || item.title);
-  const subGroup = /^\[([^\]]+)\]/.exec(item.title)?.[1] ?? "未知";
+  const subGroup = extractSubGroup(item.title);
 
-  const detailMarkdown = `
-![封面](${coverUrl})
-
-# ${animeName}
-
-**更新时间**: ${formatDate(item.pubDate)}
-
-${fileSize ? `**文件大小**: ${fileSize}` : ""}
-
----
-**原始文件**: ${item.title}
-  `;
+  const detailMarkdown = buildDetailMarkdown({
+    coverUrl,
+    animeName,
+    pubDate: item.pubDate,
+    fileSize,
+    title: item.title,
+  });
 
   return (
     <List.Item
