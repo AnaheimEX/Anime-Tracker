@@ -75,24 +75,30 @@ export default function AnimeSearchCommand() {
       return;
     }
 
-    const doSearch = async () => {
-      setIsLoading(true);
-      try {
-        const data = await searchAnime(searchText);
-        setResults(data);
-      } catch (error) {
-        console.error("Search failed:", error);
-        showToast({
-          style: Toast.Style.Failure,
-          title: "搜索失败",
-          message: error instanceof Error ? error.message : "未知错误",
-        });
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    // 防抖：延迟 500ms 后才执行搜索
+    const timeoutId = setTimeout(() => {
+      const doSearch = async () => {
+        setIsLoading(true);
+        try {
+          const data = await searchAnime(searchText);
+          setResults(data);
+        } catch (error) {
+          console.error("Search failed:", error);
+          showToast({
+            style: Toast.Style.Failure,
+            title: "搜索失败",
+            message: error instanceof Error ? error.message : "未知错误",
+          });
+        } finally {
+          setIsLoading(false);
+        }
+      };
 
-    doSearch();
+      doSearch();
+    }, 500);
+
+    // 清理函数：如果 searchText 再次变化，取消上一次的定时器
+    return () => clearTimeout(timeoutId);
   }, [searchText]);
 
   return (
