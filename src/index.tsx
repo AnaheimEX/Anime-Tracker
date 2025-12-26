@@ -46,6 +46,8 @@ const formatDate = (dateStr: string): string => {
   }).format(date);
 };
 
+type ActionMode = "browser_pikpak" | "download" | "copy";
+
 interface AnimeItem {
   title: string;
   link: string;
@@ -244,7 +246,7 @@ export default function Command() {
     }
   };
 
-  const handleAction = async (item: AnimeItem, mode: "browser_pikpak" | "download" | "copy") => {
+  const handleAction = async (item: AnimeItem, mode: ActionMode) => {
     // 优先使用缓存的 magnet
     const cached = cacheRef.current[item.link];
     let magnet = cached?.magnet;
@@ -406,7 +408,7 @@ export default function Command() {
 
 interface AnimeListItemProps {
   item: AnimeItem;
-  onAction: (item: AnimeItem, mode: "browser_pikpak" | "download" | "copy") => Promise<void>;
+  onAction: (item: AnimeItem, mode: ActionMode) => Promise<void>;
   onStage: (item: AnimeItem) => void;
   isStaged: boolean;
   onCopyAll: () => Promise<void>;
@@ -490,7 +492,7 @@ ${fileSizeMarkdown}
 
 interface StagedListItemProps {
   item: AnimeItem;
-  onAction: (item: AnimeItem, mode: "browser_pikpak" | "download" | "copy") => Promise<void>;
+  onAction: (item: AnimeItem, mode: ActionMode) => Promise<void>;
   onUnstage: (item: AnimeItem) => void;
   onCopyAll: () => Promise<void>;
   stagedCount: number;
