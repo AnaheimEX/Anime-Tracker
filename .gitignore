@@ -1,4 +1,26 @@
-node_modules/
+# macOS
 .DS_Store
+
+# Dependencies
+node_modules/
+
+# Build output
 dist/
+
+# Raycast
+.raycast/
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
 *.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+
+# Python PikPakAPI
+PikPakAPI-0.1.11/

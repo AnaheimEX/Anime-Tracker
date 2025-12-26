@@ -11,6 +11,35 @@
       "title": "Anime Tracker",
       "description": "Show latest anime from Mikan",
       "mode": "view"
+    },
+    {
+      "name": "anime-search",
+      "title": "Anime Search",
+      "description": "Search anime from Mikan Project",
+      "mode": "view"
+    },
+    {
+      "name": "pikpak",
+      "title": "PikPak Manager",
+      "description": "Manage PikPak offline tasks and files",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "pikpakUsername",
+      "type": "textfield",
+      "required": false,
+      "title": "PikPak 用户名",
+      "description": "PikPak 账号（邮箱或手机号）",
+      "placeholder": "your@email.com"
+    },
+    {
+      "name": "pikpakPassword",
+      "type": "password",
+      "required": false,
+      "title": "PikPak 密码",
+      "description": "PikPak 账号密码"
     }
   ],
   "dependencies": {
@@ -19,7 +48,7 @@
   },
   "devDependencies": {
     "@types/node": "18.18.4",
-    "@types/react": "18.2.27",
+    "@types/react": "^19.2.7",
     "typescript": "^5.2.2"
   },
   "scripts": {

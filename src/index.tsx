@@ -1,241 +1,211 @@
-import { ActionPanel, Action, List, showToast, Toast, open, Icon, Color, Clipboard } from "@raycast/api";
-import { useState, useEffect, useRef } from "react";
-import Parser from "rss-parser";
+import React, { useCallback, useMemo } from "react";
+import { List, showToast, Toast, open, Icon, Color, Clipboard } from "@raycast/api";
 
-interface AnimeItem {
-  title: string;
-  link: string;
-  pubDate: string;
-  torrentUrl?: string;
-  guid?: string;
-  animeName: string;
-  isToday: boolean;
-  // 以下字段通过二次抓取获得
-  coverUrl?: string;
-  intro?: string;
-}
-
-const parser = new Parser();
-const RSS_URL = "https://mikanani.me/RSS/Classic";
-const MIKAN_BASE = "https://mikanani.me";
+import {
+  type AnimeItem,
+  type ActionMode,
+  extractSubGroup,
+  useAnimeRss,
+  useDetailPrefetch,
+  useStagedItems,
+  StagedContext,
+  usePikPak,
+} from "./lib";
+import { buildDetailMarkdown } from "./components/DetailMarkdown";
+import { AnimeActions } from "./components/AnimeActions";
+import { hasCredentials } from "./lib/pikpak";
 
 export default function Command() {
-  const [items, setItems] = useState<AnimeItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  
-  // 用于缓存详情页数据，防止重复请求 { [link]: { cover, intro } }
-  const cacheRef = useRef<Record<string, { cover?: string; intro?: string }>>({});
-  // 强制刷新 UI 的状态
-  const [, forceUpdate] = useState({});
+  const { items, setItems, isLoading } = useAnimeRss();
+  const { handleSelectionChange, getCachedMagnet } = useDetailPrefetch(items, setItems);
+  const { client: pikpakClient, isLoggedIn: isPikPakLoggedIn } = usePikPak();
 
-  useEffect(() => {
-    async function fetchFeed() {
+  const getMagnetLinkWithCache = useCallback(
+    async (detailUrl: string): Promise<string | null> => {
+      const cached = getCachedMagnet(detailUrl);
+      if (cached !== undefined) {
+        return cached;
+      }
+
       try {
-        const response = await fetch(`${RSS_URL}?t=${Date.now()}`, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          },
-        });
+        const { MAGNET_PATTERN, decodeHtmlEntities } = await import("./lib");
+        const response = await fetch(detailUrl);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const html = await response.text();
 
-        if (!response.ok) throw new Error("Network Error");
-
-        const xmlText = await response.text();
-        const feed = await parser.parseString(xmlText);
-        
-        const now = new Date();
-        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-
-        const parsedItems: AnimeItem[] = feed.items.map((item) => {
-          const fullTitle = item.title || "";
-          // 提取纯净的动画名
-          let animeName = fullTitle;
-          const nameMatch = fullTitle.match(/^\[.*?\]\s*(.*?)(?:\s-|\[|\()/);
-          if (nameMatch && nameMatch[1]) {
-            animeName = nameMatch[1].trim();
-          }
-
-          const itemTime = new Date(item.pubDate || "").getTime();
-
-          return {
-            title: fullTitle,
-            link: item.link || "",
-            pubDate: item.pubDate || "",
-            guid: item.guid,
-            torrentUrl: item.enclosure?.url,
-            animeName: animeName,
-            isToday: itemTime >= startOfToday,
-          };
-        });
-
-        // 截取前 50 条，避免列表过长
-        setItems(parsedItems.slice(0, 50));
-        setIsLoading(false);
-
+        const match = MAGNET_PATTERN.exec(html);
+        return match ? decodeHtmlEntities(match[0]) : null;
       } catch (error) {
-        showToast({ style: Toast.Style.Failure, title: "RSS 获取失败", message: "请检查网络" });
-        setIsLoading(false);
+        console.error("Failed to get magnet link:", error);
+        return null;
       }
-    }
+    },
+    [getCachedMagnet]
+  );
 
-    fetchFeed();
-  }, []);
+  const { stagedItems, handleStage, handleUnstage, handleCopyAllMagnets, isStaged } =
+    useStagedItems<AnimeItem>(getMagnetLinkWithCache);
 
-  // --- 核心优化：当选中某一行时，去抓取它的封面和简介 ---
-  const handleSelectionChange = async (itemId: string | null) => {
-    if (!itemId) return;
+  const handleAction = useCallback(
+    async (item: AnimeItem, mode: ActionMode) => {
+      const toast = await showToast({ style: Toast.Style.Animated, title: "解析磁力链..." });
+      const magnet = await getMagnetLinkWithCache(item.link);
+      toast.hide();
 
-    const selectedItem = items.find((i) => i.guid === itemId);
-    if (!selectedItem) return;
-
-    // 1. 如果缓存里有了，不需要再抓
-    if (cacheRef.current[selectedItem.link]) {
-      return;
-    }
-
-    // 2. 抓取网页并解析
-    try {
-        // 稍微做个防抖或延迟其实更好，但为了响应速度直接请求
-        const res = await fetch(selectedItem.link);
-        const html = await res.text();
-
-        // --- 正则提取封面 ---
-        // Mikan 封面通常在 style="background-image: url('/Images/...')"
-        const coverMatch = html.match(/background-image:\s*url\('([^']+)'\)/);
-        let coverUrl = coverMatch ? coverMatch[1] : undefined;
-        if (coverUrl && coverUrl.startsWith("/")) {
-            coverUrl = MIKAN_BASE + coverUrl;
+      if (!magnet) {
+        if (item.torrentUrl && mode === "download") {
+          open(item.torrentUrl);
+          await showToast({ style: Toast.Style.Success, title: "已下载种子" });
+          return;
         }
-
-        // --- 正则提取简介 ---
-        // 简介通常在 <p class="bangumi-intro"> ... </p>
-        const introMatch = html.match(/<p class="bangumi-intro">([\s\S]*?)<\/p>/);
-        let intro = introMatch ? introMatch[1].replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").trim() : "暂无简介";
-        
-        // 截断简介防止过长
-        if (intro.length > 150) intro = intro.substring(0, 150) + "...";
-
-        // 3. 写入缓存并更新 UI
-        cacheRef.current[selectedItem.link] = { cover: coverUrl, intro };
-        
-        // 更新 items 数组中的对应项
-        setItems((prevItems) => 
-            prevItems.map(item => 
-                item.link === selectedItem.link ? { ...item, coverUrl, intro } : item
-            )
-        );
-        forceUpdate({}); // 触发重渲染
-
-    } catch (e) {
-        // 抓取失败忽略即可，显示默认信息
-    }
-  };
-
-  // 获取磁力链
-  const getMagnetLink = async (detailUrl: string): Promise<string | null> => {
-    try {
-      const response = await fetch(detailUrl);
-      const html = await response.text();
-      const magnetRegex = /magnet:\?xt=urn:btih:[a-zA-Z0-9]*/;
-      const match = html.match(magnetRegex);
-      return match ? match[0] : null;
-    } catch (e) {
-      return null;
-    }
-  };
-
-  const handleAction = async (item: AnimeItem, mode: "browser_pikpak" | "download" | "copy") => {
-    const toast = await showToast({ style: Toast.Style.Animated, title: "解析磁力链..." });
-    const magnet = await getMagnetLink(item.link);
-
-    if (!magnet) {
-      if (item.torrentUrl && mode === "download") {
-         open(item.torrentUrl);
-         toast.style = Toast.Style.Success;
-         toast.title = "已下载种子";
-         return;
+        open(item.link);
+        await showToast({ style: Toast.Style.Failure, title: "直接打开网页" });
+        return;
       }
-      open(item.link);
-      toast.style = Toast.Style.Failure;
-      toast.title = "直接打开网页";
-      return;
-    }
 
-    if (mode === "browser_pikpak") {
-      await Clipboard.copy(magnet);
-      await open(item.link); 
-      toast.style = Toast.Style.Success;
-      toast.title = "复制成功 & 打开网页";
-    } else if (mode === "download") {
-      open(magnet);
-      toast.style = Toast.Style.Success;
-      toast.title = "已唤起下载";
-    } else {
-      await Clipboard.copy(magnet);
-      toast.style = Toast.Style.Success;
-      toast.title = "已复制";
-    }
-  };
+      if (mode === "browser_pikpak") {
+        await Clipboard.copy(magnet);
+        await open(item.link);
+        await showToast({ style: Toast.Style.Success, title: "复制成功 & 打开网页" });
+      } else if (mode === "download") {
+        open(magnet);
+        await showToast({ style: Toast.Style.Success, title: "已唤起下载" });
+      } else {
+        await Clipboard.copy(magnet);
+        await showToast({ style: Toast.Style.Success, title: "已复制" });
+      }
+    },
+    [getMagnetLinkWithCache]
+  );
 
-  const todayItems = items.filter(i => i.isToday);
-  const otherItems = items.filter(i => !i.isToday);
+  const handleSendToPikPak = useCallback(
+    async (item: AnimeItem) => {
+      if (!pikpakClient || !isPikPakLoggedIn) {
+        await showToast({
+          style: Toast.Style.Failure,
+          title: "未登录 PikPak",
+          message: "请先配置 PikPak 账号",
+        });
+        return;
+      }
+
+      const toast = await showToast({ style: Toast.Style.Animated, title: "解析磁力链..." });
+      const magnet = await getMagnetLinkWithCache(item.link);
+
+      if (!magnet) {
+        toast.hide();
+        await showToast({ style: Toast.Style.Failure, title: "无法获取磁力链" });
+        return;
+      }
+
+      try {
+        toast.title = "发送到 PikPak...";
+        await pikpakClient.addOfflineTask(magnet);
+        toast.hide();
+        await showToast({
+          style: Toast.Style.Success,
+          title: "已添加到 PikPak",
+          message: item.animeName,
+        });
+      } catch (error) {
+        toast.hide();
+        await showToast({
+          style: Toast.Style.Failure,
+          title: "添加失败",
+          message: error instanceof Error ? error.message : "未知错误",
+        });
+      }
+    },
+    [pikpakClient, isPikPakLoggedIn, getMagnetLinkWithCache]
+  );
+
+  const getItemKey = (item: AnimeItem): string => item.guid ?? item.link;
+
+  const todayItems = items.filter((i) => i.isToday);
+  const otherItems = items.filter((i) => !i.isToday);
+
+  const contextValue = useMemo(
+    () => ({ stagedCount: stagedItems.length, onCopyAll: handleCopyAllMagnets }),
+    [stagedItems.length, handleCopyAllMagnets]
+  );
 
   return (
-    <List 
-      isLoading={isLoading} 
-      searchBarPlaceholder="搜索番剧..." 
-      isShowingDetail
-      onSelectionChange={handleSelectionChange} // 绑定选中事件
-    >
-      <List.Section title="📅 今日更新" subtitle={`${todayItems.length} 部`}>
-        {todayItems.map((item) => (
-          <AnimeListItem key={item.guid} item={item} onAction={handleAction} />
-        ))}
-      </List.Section>
+    <StagedContext.Provider value={contextValue}>
+      <List isLoading={isLoading} searchBarPlaceholder="搜索番剧..." isShowingDetail onSelectionChange={handleSelectionChange}>
+        {stagedItems.length > 0 && (
+          <List.Section title="📦 暂存列表" subtitle={`${stagedItems.length} 项`}>
+            {stagedItems.map((item) => (
+              <StagedListItem
+                key={`staged-${getItemKey(item)}`}
+                item={item}
+                onAction={handleAction}
+                onSendToPikPak={hasCredentials() && isPikPakLoggedIn ? handleSendToPikPak : undefined}
+                onUnstage={() => handleUnstage(item)}
+              />
+            ))}
+          </List.Section>
+        )}
 
-      <List.Section title="🕒 近期更新">
-        {otherItems.map((item) => (
-          <AnimeListItem key={item.guid} item={item} onAction={handleAction} />
-        ))}
-      </List.Section>
-    </List>
+        <List.Section title="📅 今日更新" subtitle={`${todayItems.length} 部`}>
+          {todayItems.map((item) => (
+            <AnimeListItem
+              key={getItemKey(item)}
+              item={item}
+              onAction={handleAction}
+              onSendToPikPak={hasCredentials() && isPikPakLoggedIn ? handleSendToPikPak : undefined}
+              onStage={() => handleStage(item)}
+              isStaged={isStaged(item)}
+            />
+          ))}
+        </List.Section>
+
+        <List.Section title="🕒 近期更新">
+          {otherItems.map((item) => (
+            <AnimeListItem
+              key={getItemKey(item)}
+              item={item}
+              onAction={handleAction}
+              onSendToPikPak={hasCredentials() && isPikPakLoggedIn ? handleSendToPikPak : undefined}
+              onStage={() => handleStage(item)}
+              isStaged={isStaged(item)}
+            />
+          ))}
+        </List.Section>
+      </List>
+    </StagedContext.Provider>
   );
 }
 
-function AnimeListItem({ item, onAction }: { item: AnimeItem; onAction: any }) {
-  // 构建 Markdown
-  // 1. 如果有封面图，显示图片
-  const imageMarkdown = item.coverUrl ? `![封面](${item.coverUrl})` : "";
-  // 2. 简介区域
-  const introMarkdown = item.intro ? `> ${item.intro}` : "> 正在获取简介...";
+interface AnimeListItemProps {
+  item: AnimeItem;
+  onAction: (item: AnimeItem, mode: ActionMode) => Promise<void>;
+  onSendToPikPak?: (item: AnimeItem) => Promise<void>;
+  onStage: () => void;
+  isStaged: boolean;
+}
 
-  const detailMarkdown = `
-${imageMarkdown}
-
-# ${item.animeName}
-
-**更新时间**: ${new Date(item.pubDate).toLocaleString()}
-
----
-${introMarkdown}
-
----
-**原始文件**: ${item.title}
-  `;
+function AnimeListItem({ item, onAction, onSendToPikPak, onStage, isStaged }: Readonly<AnimeListItemProps>) {
+  const detailMarkdown = buildDetailMarkdown({
+    coverUrl: item.coverUrl,
+    animeName: item.animeName,
+    pubDate: item.pubDate,
+    fileSize: item.fileSize,
+    title: item.title,
+  });
 
   return (
     <List.Item
-      id={item.guid} // 必须有 id 才能触发 selectionChange
+      id={item.guid ?? item.link}
       title={item.animeName}
       subtitle={item.isToday ? "今日更新" : ""}
-      // 列表左侧小图标
-      icon={{ source: Icon.Video, color: item.isToday ? Color.Green : Color.SecondaryText }}
+      icon={{ source: Icon.Video, tintColor: item.isToday ? Color.Green : Color.SecondaryText }}
       detail={
         <List.Item.Detail
           markdown={detailMarkdown}
           metadata={
             <List.Item.Detail.Metadata>
               <List.Item.Detail.Metadata.Label title="状态" text={item.isToday ? "🔥 连载中" : "已发布"} />
-              <List.Item.Detail.Metadata.Label title="字幕组" text={item.title.match(/^\[(.*?)\]/)?.[1] || "未知"} />
+              <List.Item.Detail.Metadata.Label title="字幕组" text={extractSubGroup(item.title)} />
               <List.Item.Detail.Metadata.Separator />
               <List.Item.Detail.Metadata.Link title="Mikan 详情" target={item.link} text="查看网页" />
             </List.Item.Detail.Metadata>
@@ -243,19 +213,71 @@ ${introMarkdown}
         />
       }
       actions={
-        <ActionPanel>
-          <ActionPanel.Section title="推荐操作">
-            <Action 
-              title="Chrome / PikPak 播放" 
-              icon={Icon.Globe} 
-              onAction={() => onAction(item, "browser_pikpak")} 
-            />
-          </ActionPanel.Section>
-          <ActionPanel.Section title="其他">
-            <Action title="本地下载" icon={Icon.Download} onAction={() => onAction(item, "download")} />
-            <Action.CopyToClipboard title="复制磁力链" onAction={() => onAction(item, "copy")} />
-          </ActionPanel.Section>
-        </ActionPanel>
+        <AnimeActions
+          actions={{
+            onBrowserPikpak: () => void onAction(item, "browser_pikpak"),
+            onDownload: () => void onAction(item, "download"),
+            onCopy: () => void onAction(item, "copy"),
+            onSendToPikPak: onSendToPikPak ? () => void onSendToPikPak(item) : undefined,
+          }}
+          staging={{
+            onStage: isStaged ? undefined : onStage,
+            isStaged,
+          }}
+        />
+      }
+    />
+  );
+}
+
+interface StagedListItemProps {
+  item: AnimeItem;
+  onAction: (item: AnimeItem, mode: ActionMode) => Promise<void>;
+  onSendToPikPak?: (item: AnimeItem) => Promise<void>;
+  onUnstage: () => void;
+}
+
+function StagedListItem({ item, onAction, onSendToPikPak, onUnstage }: Readonly<StagedListItemProps>) {
+  const detailMarkdown = buildDetailMarkdown({
+    coverUrl: item.coverUrl,
+    animeName: item.animeName,
+    pubDate: item.pubDate,
+    fileSize: item.fileSize,
+    title: item.title,
+  });
+
+  return (
+    <List.Item
+      id={`staged-${item.guid ?? item.link}`}
+      title={item.animeName}
+      subtitle="已暂存"
+      icon={{ source: Icon.Bookmark, tintColor: Color.Orange }}
+      detail={
+        <List.Item.Detail
+          markdown={detailMarkdown}
+          metadata={
+            <List.Item.Detail.Metadata>
+              <List.Item.Detail.Metadata.Label title="状态" text="📦 已暂存" />
+              <List.Item.Detail.Metadata.Label title="字幕组" text={extractSubGroup(item.title)} />
+              <List.Item.Detail.Metadata.Separator />
+              <List.Item.Detail.Metadata.Link title="Mikan 详情" target={item.link} text="查看网页" />
+            </List.Item.Detail.Metadata>
+          }
+        />
+      }
+      actions={
+        <AnimeActions
+          actions={{
+            onBrowserPikpak: () => void onAction(item, "browser_pikpak"),
+            onDownload: () => void onAction(item, "download"),
+            onCopy: () => void onAction(item, "copy"),
+            onSendToPikPak: onSendToPikPak ? () => void onSendToPikPak(item) : undefined,
+          }}
+          staging={{
+            onUnstage,
+            isStaged: true,
+          }}
+        />
       }
     />
   );
