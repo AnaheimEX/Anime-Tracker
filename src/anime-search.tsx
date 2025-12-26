@@ -104,7 +104,7 @@ async function searchAnime(keyword: string): Promise<SearchResult[]> {
     const [, id, coverPath, title] = match;
     results.push({
       id,
-      coverUrl: MIKAN_BASE + coverPath.split("?")[0],
+      coverUrl: MIKAN_BASE + coverPath,
       name: decodeHtmlEntities(title),
     });
   }
