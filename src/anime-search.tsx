@@ -49,7 +49,7 @@ async function searchAnime(keyword: string): Promise<SearchResult[]> {
   // 重置正则表达式的 lastIndex（因为使用了全局标志）
   SEARCH_RESULT_PATTERN.lastIndex = 0;
 
-  let match;
+  let match: RegExpExecArray | null;
   while ((match = SEARCH_RESULT_PATTERN.exec(html)) !== null) {
     const [, id, coverPath, title] = match;
     results.push({
