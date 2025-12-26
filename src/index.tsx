@@ -8,15 +8,43 @@ const isSameLocalDay = (a: Date, b: Date): boolean =>
   a.getMonth() === b.getMonth() &&
   a.getDate() === b.getDate();
 
-// 工具函数：解码常见 HTML 实体
-const decodeHtmlEntities = (text: string): string =>
-  text
+// 工具函数：解码 HTML 实体（包括命名实体和数字实体）
+const decodeHtmlEntities = (text: string): string => {
+  let result = text
     .replaceAll("&amp;", "&")
     .replaceAll("&lt;", "<")
     .replaceAll("&gt;", ">")
     .replaceAll("&quot;", '"')
     .replaceAll("&#39;", "'")
     .replaceAll("&nbsp;", " ");
+
+  // 十进制数字实体: &#1234;
+  result = result.replace(/&#(\d+);/g, (_, dec) =>
+    String.fromCodePoint(parseInt(dec, 10))
+  );
+
+  // 十六进制数字实体: &#x1A2B;
+  result = result.replace(/&#x([0-9a-fA-F]+);/gi, (_, hex) =>
+    String.fromCodePoint(parseInt(hex, 16))
+  );
+
+  return result;
+};
+
+// 工具函数：格式化日期，统一显示格式，处理缺失情况
+const formatDate = (dateStr: string): string => {
+  if (!dateStr) return "未知时间";
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return "未知时间";
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+};
 
 interface AnimeItem {
   title: string;
@@ -28,7 +56,7 @@ interface AnimeItem {
   isToday: boolean;
   // 以下字段通过二次抓取获得
   coverUrl?: string;
-  intro?: string;
+  fileSize?: string;
 }
 
 const parser = new Parser();
@@ -40,13 +68,17 @@ export default function Command() {
   const [isLoading, setIsLoading] = useState(true);
   
   // 用于缓存详情页数据，防止重复请求
-  const cacheRef = useRef<Record<string, { coverUrl?: string; intro?: string }>>({});
+  const cacheRef = useRef<Record<string, { coverUrl?: string; fileSize?: string; magnet?: string | null }>>({});
   // 用于追踪正在请求中的链接，防止重复请求
   const pendingRef = useRef<Set<string>>(new Set());
   // 用于防止闭包问题，始终读取最新的 items
   const itemsRef = useRef<AnimeItem[]>([]);
-  // 用于取消旧的详情请求
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // 用于请求 token，确保只有最新请求的结果被使用
+  const requestTokenRef = useRef(0);
+  // 用于存储 handleSelectionChange 的引用，供初始预取使用
+  const handleSelectionChangeRef = useRef<((itemId: string | null) => Promise<void>) | null>(null);
+  // 用于标记是否已完成初始预取
+  const initialPrefetchDoneRef = useRef(false);
 
   useEffect(() => {
     async function fetchFeed() {
@@ -107,7 +139,7 @@ export default function Command() {
     itemsRef.current = items;
   }, [items]);
 
-  // --- 核心优化：当选中某一行时，去抓取它的封面和简介 ---
+  // --- 核心优化：当选中某一行时，去抓取它的封面、文件大小和磁力链 ---
   const handleSelectionChange = useCallback(async (itemId: string | null) => {
     if (!itemId) return;
 
@@ -116,77 +148,84 @@ export default function Command() {
     const selectedItem = list.find((i) => (i.guid ?? i.link) === itemId);
     if (!selectedItem) return;
 
+    const link = selectedItem.link;
+
     // 1. 如果缓存里有了，不需要再抓
-    if (cacheRef.current[selectedItem.link]) {
+    if (cacheRef.current[link]) {
       return;
     }
 
     // 2. 如果正在请求中，不需要再发起新请求
-    if (pendingRef.current.has(selectedItem.link)) {
+    if (pendingRef.current.has(link)) {
       return;
     }
 
-    // 3. 取消上一个请求（如果存在），避免竞态浪费
-    abortControllerRef.current?.abort();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
+    // 3. 递增 token，用于校验结果是否仍为当前请求
+    const currentToken = ++requestTokenRef.current;
 
     // 4. 标记为正在请求
-    pendingRef.current.add(selectedItem.link);
+    pendingRef.current.add(link);
 
     // 5. 抓取网页并解析
     try {
-        const res = await fetch(selectedItem.link, { signal: controller.signal });
+        const res = await fetch(link);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const html = await res.text();
 
-        // --- 正则提取封面 ---
-        // 兼容单引号、双引号、无引号的 url()
-        const coverMatch = /background-image:\s*url\(["']?([^"')]+)["']?\)/u.exec(html);
-        let coverUrl = coverMatch ? coverMatch[1] : undefined;
+        // 校验是否仍为当前请求，避免旧请求覆盖新数据
+        if (requestTokenRef.current !== currentToken) {
+          return;
+        }
+
+        // --- 精确匹配 .bangumi-poster 的背景图 ---
+        const coverMatch = /class="bangumi-poster[^"]*"[^>]*style="[^"]*background-image:\s*url\(['"]?([^'")\s]+)['"]?\)/u.exec(html);
+        let coverUrl = coverMatch?.[1];
         if (coverUrl?.startsWith("/")) {
             coverUrl = MIKAN_BASE + coverUrl;
         }
 
-        // --- 正则提取简介 ---
-        const introMatch = /<p class="bangumi-intro">([\s\S]*?)<\/p>/u.exec(html);
-        let intro = introMatch
-          ? decodeHtmlEntities(
-              introMatch[1].replaceAll(/<br\s*\/?>/gi, "\n").replaceAll(/<[^>]+>/gu, "").trim()
-            )
-          : "暂无简介";
+        // --- 提取文件大小 ---
+        const fileSizeMatch = /class="bangumi-info"[^>]*>文件大小：([^<]+)</u.exec(html);
+        const fileSize = fileSizeMatch?.[1]?.trim();
 
-        // 截断简介防止过长
-        if (intro.length > 150) intro = intro.substring(0, 150) + "...";
+        // --- 提取磁力链接（用于缓存，避免 action 时重复请求）---
+        const magnetMatch = /href="(magnet:\?xt=urn:btih:[^"]+)"/u.exec(html);
+        const magnet = magnetMatch ? decodeHtmlEntities(magnetMatch[1]) : null;
 
         // 6. 写入缓存并更新 UI
-        cacheRef.current[selectedItem.link] = { coverUrl, intro };
+        cacheRef.current[link] = { coverUrl, fileSize, magnet };
 
         // 更新 items 数组中的对应项
         setItems((prevItems) =>
             prevItems.map(item =>
-                item.link === selectedItem.link ? { ...item, coverUrl, intro } : item
+                item.link === link ? { ...item, coverUrl, fileSize } : item
             )
         );
 
     } catch (error: unknown) {
-        // 如果是主动取消的请求，不需要处理
-        if (error instanceof Error && error.name === "AbortError") {
-          return;
-        }
         const message = error instanceof Error ? error.message : "获取失败";
         console.error("Failed to fetch anime details:", message);
-        // 更新 UI 显示错误状态
-        setItems((prevItems) =>
-            prevItems.map(item =>
-                item.link === selectedItem.link ? { ...item, intro: "获取简介失败" } : item
-            )
-        );
     } finally {
         // 7. 清除请求中标记
-        pendingRef.current.delete(selectedItem.link);
+        pendingRef.current.delete(link);
     }
   }, []);
+
+  // 更新 ref，供初始预取使用
+  handleSelectionChangeRef.current = handleSelectionChange;
+
+  // 初始预取第一条：当 items 首次加载完成时，自动预取第一条的详情
+  useEffect(() => {
+    if (items.length > 0 && !initialPrefetchDoneRef.current) {
+      initialPrefetchDoneRef.current = true;
+      const firstItem = items[0];
+      const firstId = firstItem.guid ?? firstItem.link;
+      // 延迟一帧确保 itemsRef 已更新
+      setTimeout(() => {
+        handleSelectionChangeRef.current?.(firstId);
+      }, 0);
+    }
+  }, [items]);
 
   // 获取磁力链
   const getMagnetLink = async (detailUrl: string): Promise<string | null> => {
@@ -205,35 +244,47 @@ export default function Command() {
   };
 
   const handleAction = async (item: AnimeItem, mode: "browser_pikpak" | "download" | "copy") => {
-    const toast = await showToast({ style: Toast.Style.Animated, title: "解析磁力链..." });
-    const magnet = await getMagnetLink(item.link);
+    // 优先使用缓存的 magnet
+    const cached = cacheRef.current[item.link];
+    let magnet = cached?.magnet;
 
+    // 只有缓存中没有（undefined）才去抓取
+    // 注意：null 表示已尝试但未找到，不需要重新抓取
+    if (magnet === undefined) {
+      const toast = await showToast({ style: Toast.Style.Animated, title: "解析磁力链..." });
+      magnet = await getMagnetLink(item.link);
+      // 存入缓存（即使是 null 也存，避免重复请求）
+      if (cached) {
+        cached.magnet = magnet;
+      } else {
+        cacheRef.current[item.link] = { magnet };
+      }
+      toast.hide();
+    }
+
+    // 处理没有 magnet 的情况
     if (!magnet) {
       if (item.torrentUrl && mode === "download") {
-         open(item.torrentUrl);
-         toast.style = Toast.Style.Success;
-         toast.title = "已下载种子";
-         return;
+        open(item.torrentUrl);
+        await showToast({ style: Toast.Style.Success, title: "已下载种子" });
+        return;
       }
       open(item.link);
-      toast.style = Toast.Style.Failure;
-      toast.title = "直接打开网页";
+      await showToast({ style: Toast.Style.Failure, title: "直接打开网页" });
       return;
     }
 
+    // 有 magnet，执行对应操作
     if (mode === "browser_pikpak") {
       await Clipboard.copy(magnet);
-      await open(item.link); 
-      toast.style = Toast.Style.Success;
-      toast.title = "复制成功 & 打开网页";
+      await open(item.link);
+      await showToast({ style: Toast.Style.Success, title: "复制成功 & 打开网页" });
     } else if (mode === "download") {
       open(magnet);
-      toast.style = Toast.Style.Success;
-      toast.title = "已唤起下载";
+      await showToast({ style: Toast.Style.Success, title: "已唤起下载" });
     } else {
       await Clipboard.copy(magnet);
-      toast.style = Toast.Style.Success;
-      toast.title = "已复制";
+      await showToast({ style: Toast.Style.Success, title: "已复制" });
     }
   };
 
@@ -266,18 +317,17 @@ function AnimeListItem({ item, onAction }: Readonly<{ item: AnimeItem; onAction:
   // 构建 Markdown
   // 1. 如果有封面图，显示图片
   const imageMarkdown = item.coverUrl ? `![封面](${item.coverUrl})` : "";
-  // 2. 简介区域
-  const introMarkdown = item.intro ? `> ${item.intro}` : "> 正在获取简介...";
+  // 2. 文件大小信息
+  const fileSizeMarkdown = item.fileSize ? `**文件大小**: ${item.fileSize}` : "";
 
   const detailMarkdown = `
 ${imageMarkdown}
 
 # ${item.animeName}
 
-**更新时间**: ${new Date(item.pubDate).toLocaleString()}
+**更新时间**: ${formatDate(item.pubDate)}
 
----
-${introMarkdown}
+${fileSizeMarkdown}
 
 ---
 **原始文件**: ${item.title}
