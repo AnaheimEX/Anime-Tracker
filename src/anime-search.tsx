@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   ActionPanel,
   Action,
@@ -277,8 +277,13 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
 
   const getItemKey = (item: BangumiItem): string => item.guid ?? item.link;
 
+  const contextValue = useMemo(
+    () => ({ stagedCount: stagedItems.length, onCopyAll: handleCopyAllMagnets }),
+    [stagedItems.length, handleCopyAllMagnets]
+  );
+
   return (
-    <StagedContext.Provider value={{ stagedCount: stagedItems.length, onCopyAll: handleCopyAllMagnets }}>
+    <StagedContext.Provider value={contextValue}>
       <List
         navigationTitle={name}
         isLoading={isLoading}
@@ -389,10 +394,10 @@ function ResourceListItem({
       actions={
         <AnimeActions
           actions={{
-            onBrowserPikpak: () => onAction(item, "browser_pikpak"),
-            onDownload: () => onAction(item, "download"),
-            onCopy: () => onAction(item, "copy"),
-            onSendToPikPak: onSendToPikPak ? () => onSendToPikPak(item) : undefined,
+            onBrowserPikpak: () => void onAction(item, "browser_pikpak"),
+            onDownload: () => void onAction(item, "download"),
+            onCopy: () => void onAction(item, "copy"),
+            onSendToPikPak: onSendToPikPak ? () => void onSendToPikPak(item) : undefined,
           }}
           staging={{
             onStage: staging.isStaged ? undefined : staging.onStage,
@@ -455,10 +460,10 @@ function StagedListItem({
       actions={
         <AnimeActions
           actions={{
-            onBrowserPikpak: () => onAction(item, "browser_pikpak"),
-            onDownload: () => onAction(item, "download"),
-            onCopy: () => onAction(item, "copy"),
-            onSendToPikPak: onSendToPikPak ? () => onSendToPikPak(item) : undefined,
+            onBrowserPikpak: () => void onAction(item, "browser_pikpak"),
+            onDownload: () => void onAction(item, "download"),
+            onCopy: () => void onAction(item, "copy"),
+            onSendToPikPak: onSendToPikPak ? () => void onSendToPikPak(item) : undefined,
           }}
           staging={{
             onUnstage,

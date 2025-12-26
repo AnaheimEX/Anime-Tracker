@@ -10,7 +10,6 @@ export default function PikPakCommand() {
   const { client, isLoggedIn, isLoading: clientLoading, login } = usePikPak();
   const [tasks, setTasks] = useState<OfflineTask[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   // 检查是否配置了凭据
   const hasConfig = hasCredentials();
@@ -221,7 +220,6 @@ export default function PikPakCommand() {
     <List
       isLoading={isLoading || clientLoading}
       searchBarPlaceholder="搜索任务..."
-      onSelectionChange={(id) => setSelectedTaskId(id)}
     >
       {tasks.length === 0 && !isLoading ? (
         <List.EmptyView
@@ -346,21 +344,24 @@ function TaskListItem({ task, onDelete, onRetry, onGetDownloadUrl, onPlayWithIIN
       actions={
         <ActionPanel>
           <ActionPanel.Section title="任务操作">
-            {task.phase === "PHASE_TYPE_COMPLETE" && task.file_id && (
-              <>
-                <Action
-                  title="使用 IINA 播放"
-                  icon={Icon.Play}
-                  onAction={() => onPlayWithIINA(task.file_id!)}
-                />
-                <Action
-                  title="获取下载链接"
-                  icon={Icon.Link}
-                  shortcut={{ modifiers: ["cmd"], key: "l" }}
-                  onAction={() => onGetDownloadUrl(task.file_id!)}
-                />
-              </>
-            )}
+            {(() => {
+              const fileId = task.file_id;
+              return task.phase === "PHASE_TYPE_COMPLETE" && fileId ? (
+                <>
+                  <Action
+                    title="使用 IINA 播放"
+                    icon={Icon.Play}
+                    onAction={() => onPlayWithIINA(fileId)}
+                  />
+                  <Action
+                    title="获取下载链接"
+                    icon={Icon.Link}
+                    shortcut={{ modifiers: ["cmd"], key: "l" }}
+                    onAction={() => onGetDownloadUrl(fileId)}
+                  />
+                </>
+              ) : null;
+            })()}
             {task.phase === "PHASE_TYPE_ERROR" && (
               <Action
                 title="重试任务"

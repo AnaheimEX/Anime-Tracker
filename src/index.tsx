@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useMemo } from "react";
 import { List, showToast, Toast, open, Icon, Color, Clipboard } from "@raycast/api";
 
 import {
@@ -124,8 +124,13 @@ export default function Command() {
   const todayItems = items.filter((i) => i.isToday);
   const otherItems = items.filter((i) => !i.isToday);
 
+  const contextValue = useMemo(
+    () => ({ stagedCount: stagedItems.length, onCopyAll: handleCopyAllMagnets }),
+    [stagedItems.length, handleCopyAllMagnets]
+  );
+
   return (
-    <StagedContext.Provider value={{ stagedCount: stagedItems.length, onCopyAll: handleCopyAllMagnets }}>
+    <StagedContext.Provider value={contextValue}>
       <List isLoading={isLoading} searchBarPlaceholder="搜索番剧..." isShowingDetail onSelectionChange={handleSelectionChange}>
         {stagedItems.length > 0 && (
           <List.Section title="📦 暂存列表" subtitle={`${stagedItems.length} 项`}>
@@ -210,10 +215,10 @@ function AnimeListItem({ item, onAction, onSendToPikPak, onStage, isStaged }: Re
       actions={
         <AnimeActions
           actions={{
-            onBrowserPikpak: () => onAction(item, "browser_pikpak"),
-            onDownload: () => onAction(item, "download"),
-            onCopy: () => onAction(item, "copy"),
-            onSendToPikPak: onSendToPikPak ? () => onSendToPikPak(item) : undefined,
+            onBrowserPikpak: () => void onAction(item, "browser_pikpak"),
+            onDownload: () => void onAction(item, "download"),
+            onCopy: () => void onAction(item, "copy"),
+            onSendToPikPak: onSendToPikPak ? () => void onSendToPikPak(item) : undefined,
           }}
           staging={{
             onStage: isStaged ? undefined : onStage,
@@ -263,10 +268,10 @@ function StagedListItem({ item, onAction, onSendToPikPak, onUnstage }: Readonly<
       actions={
         <AnimeActions
           actions={{
-            onBrowserPikpak: () => onAction(item, "browser_pikpak"),
-            onDownload: () => onAction(item, "download"),
-            onCopy: () => onAction(item, "copy"),
-            onSendToPikPak: onSendToPikPak ? () => onSendToPikPak(item) : undefined,
+            onBrowserPikpak: () => void onAction(item, "browser_pikpak"),
+            onDownload: () => void onAction(item, "download"),
+            onCopy: () => void onAction(item, "copy"),
+            onSendToPikPak: onSendToPikPak ? () => void onSendToPikPak(item) : undefined,
           }}
           staging={{
             onUnstage,
