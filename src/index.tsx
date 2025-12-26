@@ -1,5 +1,5 @@
 import { ActionPanel, Action, List, showToast, Toast, open, Icon, Color, Clipboard } from "@raycast/api";
-import { useState, useEffect, useRef, useReducer } from "react";
+import { useState, useEffect, useRef } from "react";
 import Parser from "rss-parser";
 
 interface AnimeItem {
@@ -25,8 +25,8 @@ export default function Command() {
   
   // 用于缓存详情页数据，防止重复请求 { [link]: { cover, intro } }
   const cacheRef = useRef<Record<string, { cover?: string; intro?: string }>>({});
-  // 强制刷新 UI 的状态
-  const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
+  // 用于追踪正在请求中的链接，防止重复请求
+  const pendingRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     async function fetchFeed() {
@@ -85,7 +85,8 @@ export default function Command() {
   const handleSelectionChange = async (itemId: string | null) => {
     if (!itemId) return;
 
-    const selectedItem = items.find((i) => i.guid === itemId);
+    // 使用 itemId 匹配 guid 或 link（作为 fallback）
+    const selectedItem = items.find((i) => (i.guid ?? i.link) === itemId);
     if (!selectedItem) return;
 
     // 1. 如果缓存里有了，不需要再抓
@@ -93,10 +94,18 @@ export default function Command() {
       return;
     }
 
-    // 2. 抓取网页并解析
+    // 2. 如果正在请求中，不需要再发起新请求
+    if (pendingRef.current.has(selectedItem.link)) {
+      return;
+    }
+
+    // 3. 标记为正在请求
+    pendingRef.current.add(selectedItem.link);
+
+    // 4. 抓取网页并解析
     try {
-        // 稍微做个防抖或延迟其实更好，但为了响应速度直接请求
         const res = await fetch(selectedItem.link);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const html = await res.text();
 
         // --- 正则提取封面 ---
@@ -111,23 +120,32 @@ export default function Command() {
         // 简介通常在 <p class="bangumi-intro"> ... </p>
         const introMatch = /<p class="bangumi-intro">([\s\S]*?)<\/p>/u.exec(html);
         let intro = introMatch ? introMatch[1].replaceAll(/<br\s*\/?>/gi, "\n").replaceAll(/<[^>]+>/gu, "").trim() : "暂无简介";
-        
+
         // 截断简介防止过长
         if (intro.length > 150) intro = intro.substring(0, 150) + "...";
 
-        // 3. 写入缓存并更新 UI
+        // 5. 写入缓存并更新 UI
         cacheRef.current[selectedItem.link] = { cover: coverUrl, intro };
-        
+
         // 更新 items 数组中的对应项
-        setItems((prevItems) => 
-            prevItems.map(item => 
+        setItems((prevItems) =>
+            prevItems.map(item =>
                 item.link === selectedItem.link ? { ...item, coverUrl, intro } : item
             )
         );
-        forceUpdate(); // 触发重渲染
 
     } catch (error: unknown) {
-        console.error("Failed to fetch anime details:", error instanceof Error ? error.message : error);
+        const message = error instanceof Error ? error.message : "获取失败";
+        console.error("Failed to fetch anime details:", message);
+        // 更新 UI 显示错误状态
+        setItems((prevItems) =>
+            prevItems.map(item =>
+                item.link === selectedItem.link ? { ...item, intro: "获取简介失败" } : item
+            )
+        );
+    } finally {
+        // 6. 清除请求中标记
+        pendingRef.current.delete(selectedItem.link);
     }
   };
 
@@ -135,6 +153,7 @@ export default function Command() {
   const getMagnetLink = async (detailUrl: string): Promise<string | null> => {
     try {
       const response = await fetch(detailUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const html = await response.text();
       const magnetRegex = /magnet:\?xt=urn:btih:[a-zA-Z0-9]*/u;
       const match = magnetRegex.exec(html);
@@ -190,13 +209,13 @@ export default function Command() {
     >
       <List.Section title="📅 今日更新" subtitle={`${todayItems.length} 部`}>
         {todayItems.map((item) => (
-          <AnimeListItem key={item.guid} item={item} onAction={handleAction} />
+          <AnimeListItem key={item.guid ?? item.link} item={item} onAction={handleAction} />
         ))}
       </List.Section>
 
       <List.Section title="🕒 近期更新">
         {otherItems.map((item) => (
-          <AnimeListItem key={item.guid} item={item} onAction={handleAction} />
+          <AnimeListItem key={item.guid ?? item.link} item={item} onAction={handleAction} />
         ))}
       </List.Section>
     </List>
@@ -226,7 +245,7 @@ ${introMarkdown}
 
   return (
     <List.Item
-      id={item.guid} // 必须有 id 才能触发 selectionChange
+      id={item.guid ?? item.link} // 必须有 id 才能触发 selectionChange
       title={item.animeName}
       subtitle={item.isToday ? "今日更新" : ""}
       // 列表左侧小图标
