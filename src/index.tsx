@@ -161,11 +161,15 @@ function AnimeListItem({ item, onAction, onStage, isStaged }: Readonly<AnimeList
       }
       actions={
         <AnimeActions
-          onBrowserPikpak={() => onAction(item, "browser_pikpak")}
-          onDownload={() => onAction(item, "download")}
-          onCopy={() => onAction(item, "copy")}
-          onStage={isStaged ? undefined : onStage}
-          isStaged={isStaged}
+          actions={{
+            onBrowserPikpak: () => onAction(item, "browser_pikpak"),
+            onDownload: () => onAction(item, "download"),
+            onCopy: () => onAction(item, "copy"),
+          }}
+          staging={{
+            onStage: isStaged ? undefined : onStage,
+            isStaged,
+          }}
         />
       }
     />
@@ -208,11 +212,15 @@ function StagedListItem({ item, onAction, onUnstage }: Readonly<StagedListItemPr
       }
       actions={
         <AnimeActions
-          onBrowserPikpak={() => onAction(item, "browser_pikpak")}
-          onDownload={() => onAction(item, "download")}
-          onCopy={() => onAction(item, "copy")}
-          onUnstage={onUnstage}
-          isStaged={true}
+          actions={{
+            onBrowserPikpak: () => onAction(item, "browser_pikpak"),
+            onDownload: () => onAction(item, "download"),
+            onCopy: () => onAction(item, "copy"),
+          }}
+          staging={{
+            onUnstage,
+            isStaged: true,
+          }}
         />
       }
     />

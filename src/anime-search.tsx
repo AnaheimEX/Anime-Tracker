@@ -275,8 +275,7 @@ function BangumiDetail({ id, name, coverUrl }: Readonly<BangumiDetailProps>) {
               item={item}
               bangumiInfo={{ coverUrl, animeName: name }}
               onAction={handleAction}
-              onStage={() => handleStage(item)}
-              isStaged={isStaged(item)}
+              staging={{ onStage: () => handleStage(item), isStaged: isStaged(item) }}
             />
           ))}
         </List.Section>
@@ -290,20 +289,23 @@ interface BangumiInfo {
   animeName: string;
 }
 
+interface StagingHandlers {
+  onStage: () => void;
+  isStaged: boolean;
+}
+
 interface ResourceListItemProps {
   item: BangumiItem;
   bangumiInfo: BangumiInfo;
   onAction: (item: BangumiItem, mode: ActionMode) => Promise<void>;
-  onStage: () => void;
-  isStaged: boolean;
+  staging: StagingHandlers;
 }
 
 function ResourceListItem({
   item,
   bangumiInfo,
   onAction,
-  onStage,
-  isStaged,
+  staging,
 }: Readonly<ResourceListItemProps>) {
   const fileSize = extractFileSize(item.description || item.title);
   const subGroup = extractSubGroup(item.title);
@@ -338,11 +340,15 @@ function ResourceListItem({
       }
       actions={
         <AnimeActions
-          onBrowserPikpak={() => onAction(item, "browser_pikpak")}
-          onDownload={() => onAction(item, "download")}
-          onCopy={() => onAction(item, "copy")}
-          onStage={isStaged ? undefined : onStage}
-          isStaged={isStaged}
+          actions={{
+            onBrowserPikpak: () => onAction(item, "browser_pikpak"),
+            onDownload: () => onAction(item, "download"),
+            onCopy: () => onAction(item, "copy"),
+          }}
+          staging={{
+            onStage: staging.isStaged ? undefined : staging.onStage,
+            isStaged: staging.isStaged,
+          }}
         />
       }
     />
@@ -397,11 +403,15 @@ function StagedListItem({
       }
       actions={
         <AnimeActions
-          onBrowserPikpak={() => onAction(item, "browser_pikpak")}
-          onDownload={() => onAction(item, "download")}
-          onCopy={() => onAction(item, "copy")}
-          onUnstage={onUnstage}
-          isStaged={true}
+          actions={{
+            onBrowserPikpak: () => onAction(item, "browser_pikpak"),
+            onDownload: () => onAction(item, "download"),
+            onCopy: () => onAction(item, "copy"),
+          }}
+          staging={{
+            onUnstage,
+            isStaged: true,
+          }}
         />
       }
     />
