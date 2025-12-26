@@ -21,3 +21,6 @@ npm-debug.log*
 # Environment
 .env
 .env.local
+
+# Python PikPakAPI
+PikPakAPI-0.1.11/
